@@ -26,6 +26,8 @@ import logging
 import queue
 import urllib.request
 import urllib.parse
+import shutil
+import subprocess
 from http.client import IncompleteRead, HTTPResponse
 from mailbox import Message
 from threading import Thread
@@ -339,6 +341,27 @@ def _build_request(url: str) -> HTTPResponse:
         req.add_header("Authorization", "Basic " + ubtou(base64.b64encode(utob(user_passwd))).strip())
     return urllib.request.urlopen(req)
 
+def _run_nzb_monkey(url: str):
+    """Run nzb-monkey-go as own process with provided nzblnk as argument
+    url: The nzblnk to grab
+    """
+    if not shutil.which("nzb-monkey-go"):
+        logging.error("nzb-monkey-go binary not found in PATH. Please install or check its location.")
+        return
+
+    logging.info("Running nzb-monkey-go '%s'", url)
+    try:
+        result = subprocess.run(["nzb-monkey-go", url], capture_output=True, text=True)
+        logging.info("nzb-monkey-go Output: %s", result.stdout)
+        if result.stderr:
+            logging.warn("nzb-monkey-go Errors: %s", result.stderr)
+        logging.info("nzb-monkey-go Return Code: %i", result.returncode)
+
+        if result.returncode != 0:
+            logging.warn("nzb-monkey-go finished with errors. Check the logs for more details.")
+
+    except Exception as e:
+        logging.error("An error occurred while running nzb-monkey-go: %s", str(e))
 
 def _analyse(fetch_request: HTTPResponse, future_nzo: NzbObject):
     """Analyze response of indexer
@@ -389,7 +412,7 @@ def add_url(
     password: Optional[str] = None,
 ):
     """Add NZB based on a URL, attributes optional"""
-    if not url.lower().startswith("http"):
+    if not url.lower().startswith("http") and not url.lower().startswith("nzblnk"):
         return
     if not pp or pp == "-1":
         pp = None
@@ -405,7 +428,11 @@ def add_url(
         msg = "%s - %s" % (nzbname, msg)
 
     # Generate the placeholder
-    future_nzo = sabnzbd.NzbQueue.generate_future(msg, pp, script, cat, url=url, priority=priority, nzbname=nzbname)
+    if url.lower().startswith("nzblnk"):
+        _run_nzb_monkey(url)
+        return
+    else:
+        future_nzo = sabnzbd.NzbQueue.generate_future(msg, pp, script, cat, url=url, priority=priority, nzbname=nzbname)
 
     # Set password
     if not future_nzo.password:
